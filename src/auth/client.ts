@@ -2,10 +2,24 @@
  * Zitadel Management API Client
  * JWT bearer token authentication via service account
  *
- * Ported from app-portal's Zitadel client with class-based config injection
+ * Security notes:
+ * - Private key is imported once as CryptoKey and cached for the server lifetime (REM-42)
+ * - OAuth scope is minimal: `openid urn:zitadel:iam:org:project:id:zitadel:aud` (REM-23)
+ *   This scope grants access to Zitadel's Management API only. Actual permissions are
+ *   determined by the service account's role (should be ORG_OWNER, NOT IAM_ADMIN).
+ *   The MCP server only uses org-scoped Management API endpoints (/management/v1/*,
+ *   /v2/*) — no Admin API endpoints (/admin/v1/*).
+ * - Access tokens are cached in memory and never logged or returned to the MCP client
+ * - All communication with Zitadel uses HTTPS (enforced by issuer URL validation)
+ *
+ * Token storage assumption (REM-41):
+ * This server uses stdio transport — tokens stay in-process and are never transmitted
+ * over a network to the MCP client. The private key is loaded from an environment
+ * variable (base64-encoded) and decoded only in memory. If switching to HTTP/SSE
+ * transport, additional measures (TLS, token binding) would be required.
  */
 
-import { SignJWT, importPKCS8 } from 'jose';
+import { SignJWT, importPKCS8, type KeyLike } from 'jose';
 import { createPrivateKey } from 'crypto';
 import type { ZitadelConfig } from '../utils/config.js';
 import type { ZitadelError } from '../types/zitadel.js';
@@ -14,6 +28,7 @@ import { logger } from '../utils/logger.js';
 export class ZitadelClient {
   private config: ZitadelConfig;
   private cachedToken: { token: string; expiresAt: number } | null = null;
+  private cachedCryptoKey: KeyLike | null = null;
 
   constructor(config: ZitadelConfig) {
     this.config = config;
@@ -28,11 +43,15 @@ export class ZitadelClient {
   }
 
   /**
-   * Generate a JWT assertion for the service account
-   * Zitadel provides keys in PKCS#1 format; jose expects PKCS#8
+   * Import the private key as a CryptoKey once and cache it.
+   * Handles both PKCS#1 (RSA) and PKCS#8 PEM formats.
    */
-  private async generateJwtAssertion(): Promise<string> {
-    const { serviceAccountUserId, serviceAccountKeyId, serviceAccountPrivateKey, issuer } = this.config;
+  private async getCryptoKey(): Promise<KeyLike> {
+    if (this.cachedCryptoKey) {
+      return this.cachedCryptoKey;
+    }
+
+    const { serviceAccountPrivateKey } = this.config;
 
     // Decode the base64-encoded private key
     let privateKeyPem: string;
@@ -42,7 +61,7 @@ export class ZitadelClient {
       privateKeyPem = serviceAccountPrivateKey;
     }
 
-    // Convert PKCS#1 to PKCS#8 if needed
+    // Convert PKCS#1 to PKCS#8 if needed (jose requires PKCS#8)
     let pkcs8Pem: string;
     if (privateKeyPem.includes('BEGIN RSA PRIVATE KEY')) {
       const keyObject = createPrivateKey(privateKeyPem);
@@ -51,7 +70,17 @@ export class ZitadelClient {
       pkcs8Pem = privateKeyPem;
     }
 
-    const privateKey = await importPKCS8(pkcs8Pem, 'RS256');
+    this.cachedCryptoKey = await importPKCS8(pkcs8Pem, 'RS256');
+    return this.cachedCryptoKey;
+  }
+
+  /**
+   * Generate a JWT assertion for the service account
+   * Uses cached CryptoKey to avoid repeated key import overhead.
+   */
+  private async generateJwtAssertion(): Promise<string> {
+    const { serviceAccountUserId, serviceAccountKeyId, issuer } = this.config;
+    const privateKey = await this.getCryptoKey();
     const now = Math.floor(Date.now() / 1000);
 
     return new SignJWT({})
@@ -66,6 +95,10 @@ export class ZitadelClient {
 
   /**
    * Exchange JWT assertion for an access token (cached for ~1 hour)
+   *
+   * Scope: `openid urn:zitadel:iam:org:project:id:zitadel:aud`
+   * This is the minimum scope required to access the Management API.
+   * The service account's role assignment controls what operations are allowed.
    */
   private async getAccessToken(): Promise<string> {
     // Return cached token if still valid (with 60s safety buffer)
@@ -88,8 +121,8 @@ export class ZitadelClient {
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error('Token exchange failed', { status: response.status, error: errorText });
-      throw new Error(`Failed to get access token: ${response.status} ${errorText}`);
+      logger.error('Token exchange failed', { status: response.status });
+      throw new Error(`Failed to obtain access token (HTTP ${response.status})`);
     }
 
     const data = await response.json() as { access_token: string; expires_in?: number };
@@ -127,15 +160,26 @@ export class ZitadelClient {
         // Ignore JSON parse errors
       }
 
-      const errorMessage = errorData?.message || `HTTP ${response.status}`;
-      logger.error('Zitadel API error', { status: response.status, path, error: errorData });
+      // Log full error details internally
+      logger.error('Zitadel API error', { status: response.status, path });
 
       // Clear token cache on auth failures
       if (response.status === 401) {
         this.clearTokenCache();
       }
 
-      throw new Error(`Zitadel API error: ${errorMessage}`);
+      // Return generic message — don't leak Zitadel API internals
+      const status = response.status;
+      if (status === 404) {
+        throw new Error('The requested resource was not found.');
+      }
+      if (status === 409) {
+        throw new Error('A conflict occurred — the resource may already exist.');
+      }
+      if (status === 429) {
+        throw new Error('Rate limit exceeded. Please try again later.');
+      }
+      throw new Error(`Operation failed (HTTP ${status}). Check server logs for details.`);
     }
 
     // Handle empty responses (e.g. DELETE operations)

@@ -103,12 +103,12 @@ const getProjectHandler: ToolHandler = async (params, ctx) => {
 
 const createProjectHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    name: z.string().min(1),
+    name: z.string().min(1).max(200),
     projectRoleAssertion: z.boolean().default(true),
     projectRoleCheck: z.boolean().default(false),
   }).parse(params);
 
-  logger.info('Creating project', { name: input.name });
+  logger.info('Creating project');
 
   const response = await ctx.client.request<CreateProjectResponse>(
     '/management/v1/projects',

@@ -1,12 +1,16 @@
 /**
- * Organization tools (2 tools)
- * Org-level operations via Zitadel Management API v1 + Admin API
+ * Organization tools (1 tool)
+ * Org-level operations via Zitadel Management API v1
+ *
+ * Note: zitadel_list_orgs was removed — it used the Admin API (/admin/v1/orgs/_search)
+ * which requires IAM-level admin permissions. This violates least-privilege; the MCP
+ * server should only use org-scoped Management API endpoints. Use the Zitadel Console
+ * for cross-org administration.
  */
 
-import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types/tools.js';
 import { textResponse } from '../types/tools.js';
-import type { GetOrgResponse, ListOrgsResponse, ZitadelOrg } from '../types/zitadel.js';
+import type { GetOrgResponse } from '../types/zitadel.js';
 
 // ─── Tool Definitions ───────────────────────────────────────────────────────
 
@@ -17,18 +21,6 @@ export const ORG_TOOLS: ToolDefinition[] = [
     inputSchema: { type: 'object', properties: {} },
     _meta: { readOnly: true, domain: 'organizations' },
     annotations: { title: 'Get Organization', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  },
-  {
-    name: 'zitadel_list_orgs',
-    description: 'List all organizations in the Zitadel instance. Requires IAM-level admin permissions.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Maximum number of results (default: 50)' },
-      },
-    },
-    _meta: { readOnly: true, domain: 'organizations' },
-    annotations: { title: 'List Organizations', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
 ];
 
@@ -49,35 +41,8 @@ const getOrgHandler: ToolHandler = async (_params, ctx) => {
   return textResponse(lines.join('\n'));
 };
 
-const listOrgsHandler: ToolHandler = async (params, ctx) => {
-  const input = z.object({
-    limit: z.number().min(1).max(500).default(50),
-  }).parse(params);
-
-  const response = await ctx.client.request<ListOrgsResponse>(
-    '/admin/v1/orgs/_search',
-    {
-      method: 'POST',
-      body: JSON.stringify({ query: { offset: '0', limit: input.limit } }),
-    }
-  );
-
-  const orgs = response.result || [];
-  if (orgs.length === 0) {
-    return textResponse('No organizations found.');
-  }
-
-  const lines = orgs.map((o: ZitadelOrg) => {
-    const state = o.state?.replace('ORG_STATE_', '') || 'UNKNOWN';
-    return `- ${o.name} [${state}] ID: ${o.id}`;
-  });
-
-  return textResponse(`Found ${orgs.length} organization(s):\n\n${lines.join('\n')}`);
-};
-
 // ─── Export ──────────────────────────────────────────────────────────────────
 
 export const ORG_HANDLERS: Record<string, ToolHandler> = {
   zitadel_get_org: getOrgHandler,
-  zitadel_list_orgs: listOrgsHandler,
 };

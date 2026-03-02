@@ -89,15 +89,17 @@ describe('user handlers', () => {
   describe('zitadel_get_user', () => {
     it('returns formatted user details', async () => {
       (ctx.client.request as any).mockResolvedValue({
-        userId: 'u1',
-        username: 'jane',
-        state: 'USER_STATE_ACTIVE',
-        human: {
-          profile: { givenName: 'Jane', familyName: 'Doe' },
-          email: { email: 'jane@test.com', isEmailVerified: true },
+        user: {
+          userId: 'u1',
+          username: 'jane',
+          state: 'USER_STATE_ACTIVE',
+          human: {
+            profile: { givenName: 'Jane', familyName: 'Doe' },
+            email: { email: 'jane@test.com', isEmailVerified: true },
+          },
+          loginNames: ['jane@test.zitadel.cloud'],
+          details: { creationDate: '2025-01-01T00:00:00Z' },
         },
-        loginNames: ['jane@test.zitadel.cloud'],
-        details: { creationDate: '2025-01-01T00:00:00Z' },
       });
 
       const result = await USER_HANDLERS['zitadel_get_user']!({ userId: 'u1' }, ctx);
@@ -144,10 +146,26 @@ describe('user handlers', () => {
   });
 
   describe('zitadel_deactivate_user', () => {
-    it('deactivates user', async () => {
-      (ctx.client.request as any).mockResolvedValue({});
+    it('shows confirmation prompt without confirm flag', async () => {
+      (ctx.client.request as any).mockResolvedValue({
+        user: {
+          userId: 'u1',
+          username: 'jane',
+          state: 'USER_STATE_ACTIVE',
+          human: { profile: { givenName: 'Jane', familyName: 'Doe' } },
+        },
+      });
 
       const result = await USER_HANDLERS['zitadel_deactivate_user']!({ userId: 'u1' }, ctx);
+
+      expect(result.content[0]!.text).toContain('CONFIRM');
+      expect(result.content[0]!.text).toContain('confirm: true');
+    });
+
+    it('deactivates user with confirm: true', async () => {
+      (ctx.client.request as any).mockResolvedValue({});
+
+      const result = await USER_HANDLERS['zitadel_deactivate_user']!({ userId: 'u1', confirm: true }, ctx);
 
       expect(result.content[0]!.text).toContain('deactivated');
       expect(ctx.client.request).toHaveBeenCalledWith(
@@ -191,7 +209,7 @@ describe('application handlers', () => {
   });
 
   describe('zitadel_create_oidc_app', () => {
-    it('creates app and returns client ID', async () => {
+    it('creates app and returns client ID (secret suppressed)', async () => {
       (ctx.client.request as any).mockResolvedValue({
         appId: 'app-1',
         clientId: 'client-123',
@@ -204,8 +222,9 @@ describe('application handlers', () => {
       );
 
       expect(result.content[0]!.text).toContain('client-123');
-      expect(result.content[0]!.text).toContain('secret-abc');
-      expect(result.content[0]!.text).toContain('WARNING');
+      // Client secret should NOT be shown in response (REM-01)
+      expect(result.content[0]!.text).not.toContain('secret-abc');
+      expect(result.content[0]!.text).toContain('NOT shown here');
     });
 
     it('rejects invalid redirect URIs', async () => {
@@ -259,11 +278,21 @@ describe('role handlers', () => {
   });
 
   describe('zitadel_remove_user_grant', () => {
-    it('calls DELETE with correct path', async () => {
+    it('shows confirmation prompt without confirm flag', async () => {
+      const result = await ROLE_HANDLERS['zitadel_remove_user_grant']!(
+        { userId: 'u1', grantId: 'g1' },
+        ctx
+      );
+
+      expect(result.content[0]!.text).toContain('CONFIRM');
+      expect(result.content[0]!.text).toContain('confirm: true');
+    });
+
+    it('calls DELETE with correct path when confirmed', async () => {
       (ctx.client.request as any).mockResolvedValue({});
 
       await ROLE_HANDLERS['zitadel_remove_user_grant']!(
-        { userId: 'u1', grantId: 'g1' },
+        { userId: 'u1', grantId: 'g1', confirm: true },
         ctx
       );
 
@@ -285,7 +314,7 @@ describe('service account handlers', () => {
   });
 
   describe('zitadel_create_service_user_key', () => {
-    it('returns key details with save warning', async () => {
+    it('saves key to file and returns path', async () => {
       (ctx.client.request as any).mockResolvedValue({
         keyId: 'key-new',
         keyDetails: '{"type":"serviceaccount","keyId":"key-new"}',
@@ -297,7 +326,9 @@ describe('service account handlers', () => {
       );
 
       expect(result.content[0]!.text).toContain('key-new');
-      expect(result.content[0]!.text).toContain('cannot be retrieved again');
+      // Key is saved to file, not shown in response (REM-01)
+      expect(result.content[0]!.text).toContain('Private key saved to');
+      expect(result.content[0]!.text).toContain('.zitadel-mcp/keys/');
     });
   });
 });
@@ -330,6 +361,8 @@ describe('organization handlers', () => {
       expect(result.content[0]!.text).toContain('test.zitadel.cloud');
     });
   });
+
+  // zitadel_list_orgs removed (REM-22) — uses Admin API, violates least-privilege
 });
 
 // ─── Utility handlers ─────────────────────────────────────────────────────────
@@ -344,8 +377,10 @@ describe('utility handlers', () => {
   describe('zitadel_get_auth_config', () => {
     it('returns formatted env vars', async () => {
       (ctx.client.request as any).mockResolvedValue({
-        name: 'My App',
-        oidcConfig: { clientId: 'client-abc' },
+        app: {
+          name: 'My App',
+          oidcConfig: { clientId: 'client-abc' },
+        },
       });
 
       const result = await UTILITY_HANDLERS['zitadel_get_auth_config']!(

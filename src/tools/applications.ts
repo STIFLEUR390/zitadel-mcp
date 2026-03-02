@@ -169,15 +169,15 @@ const getAppHandler: ToolHandler = async (params, ctx) => {
 const createOIDCAppHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
     projectId: zitadelId('projectId'),
-    name: z.string().min(1),
-    redirectUris: z.array(z.string().url()).min(1),
-    postLogoutRedirectUris: z.array(z.string().url()).optional(),
-    appType: z.string().default('OIDC_APP_TYPE_WEB'),
-    authMethodType: z.string().default('OIDC_AUTH_METHOD_TYPE_NONE'),
+    name: z.string().min(1).max(200),
+    redirectUris: z.array(z.string().url().max(2000)).min(1).max(20),
+    postLogoutRedirectUris: z.array(z.string().url().max(2000)).max(20).optional(),
+    appType: z.string().max(50).default('OIDC_APP_TYPE_WEB'),
+    authMethodType: z.string().max(50).default('OIDC_AUTH_METHOD_TYPE_NONE'),
     devMode: z.boolean().default(false),
   }).parse(params);
 
-  logger.info('Creating OIDC app', { name: input.name, projectId: input.projectId });
+  logger.info('Creating OIDC app', { projectId: input.projectId });
 
   const response = await ctx.client.request<CreateOIDCAppResponse>(
     `/management/v1/projects/${input.projectId}/apps/oidc`,
@@ -204,9 +204,10 @@ const createOIDCAppHandler: ToolHandler = async (params, ctx) => {
 
   if (response.clientSecret) {
     lines.push(
-      `Client Secret: ${response.clientSecret}`,
       ``,
-      `WARNING: Save the Client Secret now — it cannot be retrieved again.`
+      `A Client Secret was generated for this app.`,
+      `For security, it is NOT shown here. Retrieve it from the Zitadel Console:`,
+      `  Project → Apps → ${input.name} → Configuration → Regenerate Client Secret`,
     );
   }
 
@@ -217,8 +218,8 @@ const updateAppHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
     projectId: zitadelId('projectId'),
     appId: zitadelId('appId'),
-    redirectUris: z.array(z.string()).optional(),
-    postLogoutRedirectUris: z.array(z.string()).optional(),
+    redirectUris: z.array(z.string().max(2000)).max(20).optional(),
+    postLogoutRedirectUris: z.array(z.string().max(2000)).max(20).optional(),
     devMode: z.boolean().optional(),
     accessTokenRoleAssertion: z.boolean().optional(),
     idTokenRoleAssertion: z.boolean().optional(),

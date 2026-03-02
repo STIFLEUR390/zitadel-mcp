@@ -59,61 +59,75 @@ export const PORTAL_TOOLS: ToolDefinition[] = [
   },
 ];
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Singleton DB Connection ─────────────────────────────────────────────────
+
+let portalSql: ReturnType<typeof postgres> | null = null;
 
 function getPortalDb(ctx: { config: { portalDatabaseUrl?: string } }): ReturnType<typeof postgres> {
   if (!ctx.config.portalDatabaseUrl) {
     throw new Error('PORTAL_DATABASE_URL is not configured');
   }
-  return postgres(ctx.config.portalDatabaseUrl);
+  if (!portalSql) {
+    portalSql = postgres(ctx.config.portalDatabaseUrl, {
+      max: 3,              // Small pool — MCP servers are single-user
+      idle_timeout: 60,    // Close idle connections after 60s
+      connect_timeout: 10, // Fail fast on connection issues
+    });
+    // Register cleanup on process exit
+    const cleanup = () => {
+      if (portalSql) {
+        portalSql.end({ timeout: 5 }).catch(() => {});
+        portalSql = null;
+      }
+    };
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+  }
+  return portalSql;
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 const portalRegisterAppHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    slug: z.string().min(1).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase letters, numbers, and hyphens only'),
-    name: z.string().min(1),
-    description: z.string().optional(),
-    appUrl: z.string().url(),
-    iconUrl: z.string().url().optional(),
+    slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase letters, numbers, and hyphens only'),
+    name: z.string().min(1).max(200),
+    description: z.string().max(1000).optional(),
+    appUrl: z.string().url().max(2000),
+    iconUrl: z.string().url().max(2000).optional(),
   }).parse(params);
 
   const sql = getPortalDb(ctx);
 
-  try {
-    // Check slug uniqueness
-    const existing = await sql`SELECT id FROM apps WHERE slug = ${input.slug} LIMIT 1`;
-    if (existing.length > 0) {
-      return errorResponse(`Slug '${input.slug}' already exists in the portal database.`);
-    }
-
-    const [app] = await sql`
-      INSERT INTO apps (slug, name, description, app_url, icon_url, created_at, updated_at)
-      VALUES (${input.slug}, ${input.name}, ${input.description || ''}, ${input.appUrl}, ${input.iconUrl || null}, NOW(), NOW())
-      RETURNING id, slug, name
-    `;
-
-    return textResponse(
-      `App registered in portal.\n` +
-      `ID: ${app?.['id']}\n` +
-      `Slug: ${app?.['slug']}\n` +
-      `Name: ${app?.['name']}`
-    );
-  } finally {
-    await sql.end();
+  // Check slug uniqueness
+  const existing = await sql`SELECT id FROM apps WHERE slug = ${input.slug} LIMIT 1`;
+  if (existing.length > 0) {
+    return errorResponse(`Slug '${input.slug}' already exists in the portal database.`);
   }
+
+  const [app] = await sql`
+    INSERT INTO apps (slug, name, description, app_url, icon_url, created_at, updated_at)
+    VALUES (${input.slug}, ${input.name}, ${input.description || ''}, ${input.appUrl}, ${input.iconUrl || null}, NOW(), NOW())
+    RETURNING id, slug, name
+  `;
+
+  return textResponse(
+    `App registered in portal.\n` +
+    `ID: ${app?.['id']}\n` +
+    `Slug: ${app?.['slug']}\n` +
+    `Name: ${app?.['name']}`
+  );
 };
 
 const portalSetupFullAppHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    name: z.string().min(1),
-    slug: z.string().min(1).regex(/^[a-z0-9-]+$/),
-    appUrl: z.string().url(),
-    description: z.string().optional(),
-    iconUrl: z.string().url().optional(),
-    projectId: z.string().optional(),
-    redirectUris: z.array(z.string()).optional(),
+    name: z.string().min(1).max(200),
+    slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/),
+    appUrl: z.string().url().max(2000),
+    description: z.string().max(1000).optional(),
+    iconUrl: z.string().url().max(2000).optional(),
+    projectId: z.string().max(200).optional(),
+    redirectUris: z.array(z.string().max(2000)).optional(),
     devMode: z.boolean().default(false),
   }).parse(params);
 
@@ -123,7 +137,7 @@ const portalSetupFullAppHandler: ToolHandler = async (params, ctx) => {
   // Step 1: Create or use existing project
   let projectId = input.projectId || config.projectId;
   if (!projectId) {
-    logger.info('Creating new Zitadel project', { name: input.name });
+    logger.info('Creating new Zitadel project');
     const project = await ctx.client.request<CreateProjectResponse>(
       '/management/v1/projects',
       {
@@ -143,7 +157,7 @@ const portalSetupFullAppHandler: ToolHandler = async (params, ctx) => {
 
   // Step 2: Create OIDC application
   const redirectUris = input.redirectUris || [`${input.appUrl}/api/auth/callback/zitadel`];
-  logger.info('Creating OIDC app', { name: input.name, projectId });
+  logger.info('Creating OIDC app', { projectId });
 
   const app = await ctx.client.request<CreateOIDCAppResponse>(
     `/management/v1/projects/${projectId}/apps/oidc`,
@@ -182,19 +196,15 @@ const portalSetupFullAppHandler: ToolHandler = async (params, ctx) => {
 
   // Step 4: Insert into portal database
   const sql = getPortalDb(ctx);
-  try {
-    const existing = await sql`SELECT id FROM apps WHERE slug = ${input.slug} LIMIT 1`;
-    if (existing.length > 0) {
-      results.push(`4. App slug '${input.slug}' already in portal DB (skipped)`);
-    } else {
-      await sql`
-        INSERT INTO apps (slug, name, description, app_url, icon_url, created_at, updated_at)
-        VALUES (${input.slug}, ${input.name}, ${input.description || ''}, ${input.appUrl}, ${input.iconUrl || null}, NOW(), NOW())
-      `;
-      results.push(`4. Registered in portal database`);
-    }
-  } finally {
-    await sql.end();
+  const existing = await sql`SELECT id FROM apps WHERE slug = ${input.slug} LIMIT 1`;
+  if (existing.length > 0) {
+    results.push(`4. App slug '${input.slug}' already in portal DB (skipped)`);
+  } else {
+    await sql`
+      INSERT INTO apps (slug, name, description, app_url, icon_url, created_at, updated_at)
+      VALUES (${input.slug}, ${input.name}, ${input.description || ''}, ${input.appUrl}, ${input.iconUrl || null}, NOW(), NOW())
+    `;
+    results.push(`4. Registered in portal database`);
   }
 
   // Step 5: Format env vars

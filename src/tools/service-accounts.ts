@@ -4,6 +4,9 @@
  */
 
 import { z } from 'zod';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ToolDefinition, ToolHandler } from '../types/tools.js';
 import { textResponse, zitadelId } from '../types/tools.js';
 import type { CreateMachineUserResponse, CreateMachineKeyResponse, ListMachineKeysResponse } from '../types/zitadel.js';
@@ -65,13 +68,13 @@ export const SERVICE_ACCOUNT_TOOLS: ToolDefinition[] = [
 
 const createServiceUserHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    userName: z.string().min(1),
-    name: z.string().min(1),
-    description: z.string().optional(),
-    accessTokenType: z.string().default('ACCESS_TOKEN_TYPE_BEARER'),
+    userName: z.string().min(1).max(200),
+    name: z.string().min(1).max(200),
+    description: z.string().max(500).optional(),
+    accessTokenType: z.string().max(50).default('ACCESS_TOKEN_TYPE_BEARER'),
   }).parse(params);
 
-  logger.info('Creating service user', { userName: input.userName });
+  logger.info('Creating service user');
 
   const response = await ctx.client.request<CreateMachineUserResponse>(
     '/management/v1/users/machine',
@@ -98,7 +101,7 @@ const createServiceUserHandler: ToolHandler = async (params, ctx) => {
 const createServiceUserKeyHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
     userId: zitadelId('userId'),
-    expirationDate: z.string().optional(),
+    expirationDate: z.string().max(30).optional(),
   }).parse(params);
 
   logger.info('Creating service user key', { userId: input.userId });
@@ -113,13 +116,19 @@ const createServiceUserKeyHandler: ToolHandler = async (params, ctx) => {
     { method: 'POST', body: JSON.stringify(body) }
   );
 
+  // Write key to local file instead of returning in MCP response
+  const keysDir = join(homedir(), '.zitadel-mcp', 'keys');
+  await mkdir(keysDir, { recursive: true, mode: 0o700 });
+
+  const keyFilePath = join(keysDir, `${input.userId}-${response.keyId}.json`);
+  await writeFile(keyFilePath, response.keyDetails, { mode: 0o600 });
+
   return textResponse(
     `Service account key created.\n` +
     `Key ID: ${response.keyId}\n\n` +
-    `=== KEY DETAILS (save immediately — cannot be retrieved again) ===\n` +
-    `${response.keyDetails}\n` +
-    `=================================================================\n\n` +
-    `Use this key to configure ZITADEL_SERVICE_ACCOUNT_KEY_ID and ZITADEL_SERVICE_ACCOUNT_PRIVATE_KEY.`
+    `Private key saved to: ${keyFilePath}\n` +
+    `(File permissions: 600 — owner read/write only)\n\n` +
+    `Use this key file to configure ZITADEL_SERVICE_ACCOUNT_KEY_ID and ZITADEL_SERVICE_ACCOUNT_PRIVATE_KEY.`
   );
 };
 

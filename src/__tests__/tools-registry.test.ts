@@ -25,9 +25,11 @@ const ALL_MODULES = [
 ];
 
 describe('tool registry', () => {
-  it('has 25 total tools', () => {
+  it('has 27 total tools', () => {
+    // 8 user + 3 project + 4 application + 5 role + 3 service-account + 1 org + 1 utility + 2 portal = 27
+    // (zitadel_list_orgs removed in REM-22 — uses Admin API, violates least-privilege)
     const total = ALL_MODULES.reduce((sum, m) => sum + m.tools.length, 0);
-    expect(total).toBe(25);
+    expect(total).toBe(27);
   });
 
   it('has no duplicate tool names', () => {

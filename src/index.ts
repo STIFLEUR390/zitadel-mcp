@@ -13,6 +13,7 @@ import { ZitadelClient } from './auth/client.js';
 import { getTools, getHandlers } from './tools/index.js';
 import { logger } from './utils/logger.js';
 import { setupErrorHandlers } from './utils/error-handler.js';
+import { createRateLimiters } from './utils/rate-limiter.js';
 import type { HandlerContext } from './types/tools.js';
 
 async function main() {
@@ -39,11 +40,12 @@ async function main() {
     return { tools: sanitizedTools };
   });
 
-  // Fields that should never appear in debug logs
+  // Fields that should never appear in debug logs (PII + sensitive URLs)
   const REDACTED_FIELDS = new Set([
     'email', 'firstName', 'lastName', 'userName',
+    'name', 'displayName', 'description', 'query',
     'redirectUris', 'postLogoutRedirectUris',
-    'appUrl', 'iconUrl',
+    'appUrl', 'iconUrl', 'slug',
   ]);
 
   function redactArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -54,6 +56,14 @@ async function main() {
     return safe;
   }
 
+  // Build a set of read-only tool names for enforcement
+  const readOnlyToolNames = new Set(
+    tools.filter(t => t._meta?.readOnly).map(t => t.name)
+  );
+
+  // Rate limiters: 60 reads/min, 10 writes/min
+  const rateLimiters = createRateLimiters();
+
   // Call tool
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
@@ -61,6 +71,14 @@ async function main() {
     logger.debug(`Tool call: ${toolName}`, { args: redactArgs(rawArgs) });
 
     try {
+      // Block write operations in read-only mode
+      if (config.readOnly && !readOnlyToolNames.has(toolName)) {
+        return {
+          content: [{ type: 'text' as const, text: `Blocked: ZITADEL_READ_ONLY is enabled. Tool "${toolName}" requires write access.` }],
+          isError: true,
+        };
+      }
+
       const handler = handlers[toolName];
       if (!handler) {
         return {
@@ -69,12 +87,25 @@ async function main() {
         };
       }
 
+      // Rate limiting: separate buckets for read vs write
+      const isReadOnly = readOnlyToolNames.has(toolName);
+      const limiter = isReadOnly ? rateLimiters.read : rateLimiters.write;
+      if (!limiter.tryAcquire()) {
+        const kind = isReadOnly ? 'read' : 'write';
+        logger.warn(`Rate limit exceeded for ${kind} operation: ${toolName}`);
+        return {
+          content: [{ type: 'text' as const, text: `Rate limit exceeded for ${kind} operations. Please wait before trying again.` }],
+          isError: true,
+        };
+      }
+
       const result = await handler(rawArgs, ctx);
       return { content: result.content, isError: result.isError || false };
     } catch (error) {
+      // Log full error details internally but return generic message to MCP client
       logger.error(`Error in ${toolName}`, { error: error instanceof Error ? error.message : error });
       return {
-        content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [{ type: 'text' as const, text: `An error occurred while executing ${toolName}. Check server logs for details.` }],
         isError: true,
       };
     }

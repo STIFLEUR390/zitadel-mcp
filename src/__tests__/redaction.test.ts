@@ -7,8 +7,9 @@ import { describe, it, expect } from 'vitest';
 // Replicate the redaction logic from index.ts for unit testing
 const REDACTED_FIELDS = new Set([
   'email', 'firstName', 'lastName', 'userName',
+  'name', 'displayName', 'description', 'query',
   'redirectUris', 'postLogoutRedirectUris',
-  'appUrl', 'iconUrl',
+  'appUrl', 'iconUrl', 'slug',
 ]);
 
 function redactArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -37,6 +38,27 @@ describe('redactArgs', () => {
     expect(result['userName']).toBe('[REDACTED]');
   });
 
+  it('redacts name, displayName, description, query', () => {
+    const result = redactArgs({
+      name: 'My Secret App',
+      displayName: 'Admin Role',
+      description: 'Internal app for finance',
+      query: 'john.doe@',
+      roleKey: 'admin',
+    });
+    expect(result['name']).toBe('[REDACTED]');
+    expect(result['displayName']).toBe('[REDACTED]');
+    expect(result['description']).toBe('[REDACTED]');
+    expect(result['query']).toBe('[REDACTED]');
+    expect(result['roleKey']).toBe('admin');
+  });
+
+  it('redacts slug', () => {
+    const result = redactArgs({ slug: 'finance-app', projectId: 'p1' });
+    expect(result['slug']).toBe('[REDACTED]');
+    expect(result['projectId']).toBe('p1');
+  });
+
   it('redacts redirect URIs', () => {
     const result = redactArgs({
       redirectUris: ['https://secret-app.internal/callback'],
@@ -60,11 +82,17 @@ describe('redactArgs', () => {
       appId: 'a1',
       roleKey: 'admin',
       limit: 50,
+      userId: 'u1',
+      grantId: 'g1',
+      confirm: true,
     });
     expect(result['projectId']).toBe('p1');
     expect(result['appId']).toBe('a1');
     expect(result['roleKey']).toBe('admin');
     expect(result['limit']).toBe(50);
+    expect(result['userId']).toBe('u1');
+    expect(result['grantId']).toBe('g1');
+    expect(result['confirm']).toBe(true);
   });
 
   it('handles empty args', () => {

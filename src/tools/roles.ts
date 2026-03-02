@@ -75,12 +75,13 @@ export const ROLE_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'zitadel_remove_user_grant',
-    description: 'Remove a role grant from a user by grant ID.',
+    description: 'Remove a role grant from a user by grant ID. Requires confirm: true.',
     inputSchema: {
       type: 'object',
       properties: {
         userId: { type: 'string', description: 'The user ID' },
         grantId: { type: 'string', description: 'The grant ID to remove' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Omit to preview the action.' },
       },
       required: ['userId', 'grantId'],
     },
@@ -144,13 +145,13 @@ const listProjectRolesHandler: ToolHandler = async (params, ctx) => {
 
 const createProjectRoleHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    roleKey: z.string().min(1),
-    displayName: z.string().min(1),
-    group: z.string().optional(),
+    roleKey: z.string().min(1).max(200),
+    displayName: z.string().min(1).max(200),
+    group: z.string().max(200).optional(),
   }).parse(params);
   const projectId = resolveProjectId(params, ctx);
 
-  logger.info('Creating project role', { projectId, roleKey: input.roleKey });
+  logger.info('Creating project role', { projectId });
 
   await ctx.client.request(
     `/management/v1/projects/${projectId}/roles`,
@@ -199,7 +200,7 @@ const listUserGrantsHandler: ToolHandler = async (params, ctx) => {
 const createUserGrantHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
     userId: zitadelId('userId'),
-    roleKeys: z.array(z.string().min(1)).min(1),
+    roleKeys: z.array(z.string().min(1).max(200)).min(1).max(50),
   }).parse(params);
   const projectId = resolveProjectId(params, ctx);
 
@@ -214,7 +215,7 @@ const createUserGrantHandler: ToolHandler = async (params, ctx) => {
     );
   }
 
-  logger.info('Creating user grant', { userId: input.userId, roleKeys: input.roleKeys, projectId });
+  logger.info('Creating user grant', { userId: input.userId, projectId });
 
   const response = await ctx.client.request<CreateUserGrantResponse>(
     `/management/v1/users/${input.userId}/grants`,
@@ -237,7 +238,16 @@ const removeUserGrantHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
     userId: zitadelId('userId'),
     grantId: zitadelId('grantId'),
+    confirm: z.boolean().optional(),
   }).parse(params);
+
+  if (!input.confirm) {
+    return textResponse(
+      `⚠ CONFIRM: Remove grant ${input.grantId} from user ${input.userId}?\n` +
+      `This will revoke the associated role(s) from this user.\n\n` +
+      `To proceed, call zitadel_remove_user_grant again with confirm: true.`
+    );
+  }
 
   await ctx.client.request(
     `/management/v1/users/${input.userId}/grants/${input.grantId}`,

@@ -61,11 +61,12 @@ export const USER_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'zitadel_deactivate_user',
-    description: 'Deactivate a user account. The user will no longer be able to log in.',
+    description: 'Deactivate a user account. The user will no longer be able to log in. Requires confirm: true.',
     inputSchema: {
       type: 'object',
       properties: {
         userId: { type: 'string', description: 'The Zitadel user ID to deactivate' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Omit to preview the action.' },
       },
       required: ['userId'],
     },
@@ -87,11 +88,12 @@ export const USER_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'zitadel_lock_user',
-    description: 'Lock a user account. The user will not be able to log in until unlocked.',
+    description: 'Lock a user account. The user will not be able to log in until unlocked. Requires confirm: true.',
     inputSchema: {
       type: 'object',
       properties: {
         userId: { type: 'string', description: 'The Zitadel user ID to lock' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Omit to preview the action.' },
       },
       required: ['userId'],
     },
@@ -113,11 +115,12 @@ export const USER_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'zitadel_delete_user',
-    description: 'Permanently delete a user. This action cannot be undone.',
+    description: 'Permanently delete a user. This action cannot be undone. Requires confirm: true. Consider using zitadel_deactivate_user instead (reversible).',
     inputSchema: {
       type: 'object',
       properties: {
         userId: { type: 'string', description: 'The Zitadel user ID to delete' },
+        confirm: { type: 'boolean', description: 'Must be true to execute. Omit to preview the action.' },
       },
       required: ['userId'],
     },
@@ -139,7 +142,7 @@ function formatUser(u: ZitadelUserDetails): string {
 
 const listUsersHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    query: z.string().optional(),
+    query: z.string().max(200).optional(),
     limit: z.number().min(1).max(500).default(50),
   }).parse(params);
 
@@ -193,12 +196,12 @@ const getUserHandler: ToolHandler = async (params, ctx) => {
 
 const createUserHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
-    email: z.string().email(),
-    firstName: z.string().min(1),
-    lastName: z.string().min(1),
+    email: z.string().email().max(320),
+    firstName: z.string().min(1).max(200),
+    lastName: z.string().min(1).max(200),
   }).parse(params);
 
-  logger.info('Creating user', { email: input.email });
+  logger.info('Creating user');
 
   const response = await ctx.client.request<CreateUserResponse>('/v2/users/human', {
     method: 'POST',
@@ -224,7 +227,19 @@ const createUserHandler: ToolHandler = async (params, ctx) => {
 };
 
 const deactivateUserHandler: ToolHandler = async (params, ctx) => {
-  const { userId } = z.object({ userId: zitadelId('userId') }).parse(params);
+  const { userId, confirm } = z.object({ userId: zitadelId('userId'), confirm: z.boolean().optional() }).parse(params);
+
+  if (!confirm) {
+    const user = await ctx.client.request<GetUserResponse>(`/v2/users/${userId}`);
+    const name = user.user.human?.profile
+      ? `${user.user.human.profile.givenName} ${user.user.human.profile.familyName}`.trim()
+      : user.user.username;
+    return textResponse(
+      `⚠ CONFIRM: Deactivate user "${name}" (${userId})?\n` +
+      `This will prevent the user from logging in.\n\n` +
+      `To proceed, call zitadel_deactivate_user again with confirm: true.`
+    );
+  }
 
   await ctx.client.request(`/v2/users/${userId}/deactivate`, { method: 'POST' });
   return textResponse(`User ${userId} has been deactivated.`);
@@ -238,7 +253,19 @@ const reactivateUserHandler: ToolHandler = async (params, ctx) => {
 };
 
 const lockUserHandler: ToolHandler = async (params, ctx) => {
-  const { userId } = z.object({ userId: zitadelId('userId') }).parse(params);
+  const { userId, confirm } = z.object({ userId: zitadelId('userId'), confirm: z.boolean().optional() }).parse(params);
+
+  if (!confirm) {
+    const user = await ctx.client.request<GetUserResponse>(`/v2/users/${userId}`);
+    const name = user.user.human?.profile
+      ? `${user.user.human.profile.givenName} ${user.user.human.profile.familyName}`.trim()
+      : user.user.username;
+    return textResponse(
+      `⚠ CONFIRM: Lock user "${name}" (${userId})?\n` +
+      `This will prevent the user from logging in until unlocked.\n\n` +
+      `To proceed, call zitadel_lock_user again with confirm: true.`
+    );
+  }
 
   await ctx.client.request(`/v2/users/${userId}/lock`, { method: 'POST' });
   return textResponse(`User ${userId} has been locked.`);
@@ -252,7 +279,20 @@ const unlockUserHandler: ToolHandler = async (params, ctx) => {
 };
 
 const deleteUserHandler: ToolHandler = async (params, ctx) => {
-  const { userId } = z.object({ userId: zitadelId('userId') }).parse(params);
+  const { userId, confirm } = z.object({ userId: zitadelId('userId'), confirm: z.boolean().optional() }).parse(params);
+
+  if (!confirm) {
+    const user = await ctx.client.request<GetUserResponse>(`/v2/users/${userId}`);
+    const name = user.user.human?.profile
+      ? `${user.user.human.profile.givenName} ${user.user.human.profile.familyName}`.trim()
+      : user.user.username;
+    return textResponse(
+      `⚠ CONFIRM: PERMANENTLY DELETE user "${name}" (${userId})?\n` +
+      `This action CANNOT be undone. The user will lose access to ALL federated applications.\n` +
+      `Consider using zitadel_deactivate_user instead (reversible).\n\n` +
+      `To proceed, call zitadel_delete_user again with confirm: true.`
+    );
+  }
 
   await ctx.client.request(`/v2/users/${userId}`, { method: 'DELETE' });
   return textResponse(`User ${userId} has been permanently deleted.`);

@@ -11,7 +11,13 @@ const configSchema = z.object({
   serviceAccountPrivateKey: z.string().min(1, 'ZITADEL_SERVICE_ACCOUNT_PRIVATE_KEY is required'),
   orgId: z.string().min(1, 'ZITADEL_ORG_ID is required'),
   projectId: z.string().optional(),
-  portalDatabaseUrl: z.string().optional(),
+  portalDatabaseUrl: z.string()
+    .regex(
+      /^postgres(ql)?:\/\/.+/,
+      'PORTAL_DATABASE_URL must be a valid PostgreSQL connection string (postgres://...)'
+    )
+    .optional(),
+  readOnly: z.boolean().default(false),
   logLevel: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).default('INFO'),
 });
 
@@ -26,6 +32,7 @@ export function loadConfig(): ZitadelConfig {
     orgId: process.env['ZITADEL_ORG_ID'],
     projectId: process.env['ZITADEL_PROJECT_ID'] || undefined,
     portalDatabaseUrl: process.env['PORTAL_DATABASE_URL'] || undefined,
+    readOnly: process.env['ZITADEL_READ_ONLY'] === 'true',
     logLevel: process.env['LOG_LEVEL'] || 'INFO',
   });
 
