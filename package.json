@@ -50,5 +50,8 @@
     "iam",
     "authentication",
     "authorization"
-  ]
+  ],
+  "allowScripts": {
+    "esbuild@0.27.3": true
+  }
 }

@@ -218,8 +218,8 @@ const updateAppHandler: ToolHandler = async (params, ctx) => {
   const input = z.object({
     projectId: zitadelId('projectId'),
     appId: zitadelId('appId'),
-    redirectUris: z.array(z.string().max(2000)).max(20).optional(),
-    postLogoutRedirectUris: z.array(z.string().max(2000)).max(20).optional(),
+    redirectUris: z.array(z.string().url().max(2000)).max(20).optional(),
+    postLogoutRedirectUris: z.array(z.string().url().max(2000)).max(20).optional(),
     devMode: z.boolean().optional(),
     accessTokenRoleAssertion: z.boolean().optional(),
     idTokenRoleAssertion: z.boolean().optional(),

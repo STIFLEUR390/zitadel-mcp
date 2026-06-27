@@ -50,9 +50,8 @@ const getAuthConfigHandler: ToolHandler = async (params, ctx) => {
     `AUTH_ZITADEL_ISSUER=${config.issuer}`,
     `AUTH_ZITADEL_CLIENT_ID=${clientId}`,
     ``,
-    `# Additional context (for reference)`,
+    `# Reference (project/app IDs for role management)`,
     `# ZITADEL_PROJECT_ID=${input.projectId}`,
-    `# ZITADEL_ORG_ID=${config.orgId}`,
     `# ZITADEL_APP_ID=${input.appId}`,
   ];
 
